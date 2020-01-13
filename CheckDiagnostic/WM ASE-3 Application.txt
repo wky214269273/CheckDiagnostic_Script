@@ -11,8 +11,8 @@
 Define("/******Test Script File******/");
 Define("/******Author: WKY *******/");
 Define("/******Date: 2020.1.7******/");
+Define("/******Module: Application******/");
 Define("#NULL");
-Define("-----> Wait start to check file");
 // then write your script, never use Define() again
 
 
@@ -143,7 +143,7 @@ CheckItem(33,5,==,"N","---->Error:$31 Service can't be supported in 01 Session")
 CheckItem(33,6,==,"Y","---->Error:$31 Service must be supported in 03 Session");
 CheckItem(33,7,==,"P","---->Error:$31 Service only support physical addressing");
 CheckItem(33,8,!=,"N","---->Error:$31 Service need to do SecurityAccess");
-CheckNRC(33,9,"12-13-22-24-31-33-72","#NULL","---->Error:$14 Service need to support NRC:","#NULL");
+CheckNRC(33,9,"12-13-22-24-31-33-72","#NULL","---->Error:$31 Service need to support NRC:","#NULL");
 //สีฮฒ
 Show("Check Application WorkSheet Completed!");
 Show("Close excel file... ...");
