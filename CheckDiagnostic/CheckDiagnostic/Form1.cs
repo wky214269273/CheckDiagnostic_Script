@@ -30,6 +30,13 @@ namespace CheckDiagnostic
              * 5:Show(xxxxx)
              * 6:CheckItem(1,1,== or !=,Yes,---->Error:$10 Sevice must be supported)
              * 7:CheckNRC(1,1,"M1-M2-M3","U1-U2-U3")
+             * 8:CheckDTCCodeHex(1,2,46)  显示码起始列位置，HEX起始列位置，DTC数量
+             * ---->Error: DTCCode: XXXXXX invalid length
+             * ---->Error: DTCHex: XXXXX invalid length
+             * ---->Error: DTCCode: XXXXXXX invalid group (注意：只有UCPB)
+             * ---->Error: DTCCode: XXXXXXXX & DTCHex: XXXXXX is inconsistent
+             * ---->Error: DTCCode: XXXXXXX invalid Failure type
+             * ---->Error: DTCCode: XXXXXXXX Duplicate
             */
             public string CaculatorSymbol;  //运算符
             public string StringBuffer;  //字符缓存
@@ -38,6 +45,7 @@ namespace CheckDiagnostic
             public string U_NRC_Des;
             public Int32 Position_X;
             public Int32 Position_Y;
+            public Int32 DTC_Count;
         }
         public struct ScriptStep
         {
@@ -45,10 +53,17 @@ namespace CheckDiagnostic
             public int StepCounts;
             public List<ScriptMode> m_Step;
         }
+        public struct DTCInfo
+        {
+            public string DTCCode;
+            public string DTCHex;
+            public int _NO;  //标记序号位置
+        }
         ScriptStep _Script_Step = new ScriptStep();  //宏步骤
         public Form1()
         {
             InitializeComponent();
+            CheckForIllegalCrossThreadCalls = false;
         }
 
         private void button2_Click(object sender, EventArgs e)  //脚本文件
@@ -90,6 +105,7 @@ namespace CheckDiagnostic
                     {
                         Worksheet workSheet = (Worksheet)workBook.Worksheets.Item[_Script_Step.m_Step[i].Position_X];
                         data = workSheet.Range[_Script_Step.m_Step[i].StringBuffer].Value2;
+                        m_Edit_Process.AppendText("---->Info: Open worksheet " + workSheet.Name + "\r\n");
                     }
                     else if (_Script_Step.m_Step[i].ScriptType == 5)
                     {
@@ -172,12 +188,306 @@ namespace CheckDiagnostic
                             }
                         }
                     }
+                    else if (_Script_Step.m_Step[i].ScriptType == 8)
+                    {
+                        List<DTCInfo> _DTC = new List<DTCInfo>();
+                        DTCInfo _DTC_Buffer = new DTCInfo();
+                        for (int j = 1; j <= _Script_Step.m_Step[i].DTC_Count; ++j)  //提取内容
+                        {
+                            _DTC_Buffer.DTCCode = Convert.ToString(data[j, _Script_Step.m_Step[i].Position_X]).Trim();
+                            _DTC_Buffer.DTCHex = Convert.ToString(data[j, _Script_Step.m_Step[i].Position_Y]).Trim();
+                            _DTC_Buffer._NO = j;
+                            _DTC.Add(_DTC_Buffer);
+                        }
+                        //第一步：检测DTCCode重复
+                        List<string> lisDupValues2 = _DTC.GroupBy(x => x.DTCCode).Where(x => x.Count() > 1).Select(x => x.Key).ToList();
+                        for (int j = 0; j < lisDupValues2.Count; ++j)
+                        {
+                            m_Edit_Process.AppendText("---->Error: DTCCode: " + lisDupValues2[j] + " Duplicate\r\n");
+                        }
+                        //剔除重复的，然后再执行下列步骤
+                        for (int j = 0; j < _DTC.Count; ++j)  //循环次数
+                        {
+                            for (int k = _DTC.Count - 1; k > j; --k)  //比较次数
+                            {
+                                if (_DTC[j].DTCCode == _DTC[k].DTCCode)
+                                {
+                                    _DTC.RemoveAt(k);
+                                }
+                            }
+                        }
+                        //执行后续检测
+                        for (int j = 0; j < _DTC.Count; ++j)
+                        {
+                            bool _Flag_Code = true;
+                            bool _Flag_HEX = true;
+                            //检测长度
+                            if (_DTC[j].DTCCode.Length != 7)
+                            {
+                                m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid Length\r\n", _DTC[j]._NO));
+                                _Flag_Code = false;
+                            }
+                            else
+                            {
+                                if (!CheckDTCInvalid(0, _DTC[j]))
+                                {
+                                    m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid Value\r\n", _DTC[j]._NO));
+                                    _Flag_Code = false;
+                                }
+                            }
+                            if (_DTC[j].DTCHex.Length != 6)
+                            {
+                                m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCHex: " + _DTC[j].DTCHex + " Invalid Length\r\n", _DTC[j]._NO));
+                                _Flag_HEX = false;
+                            }
+                            else
+                            {
+                                if (!CheckDTCInvalid(1, _DTC[j]))
+                                {
+                                    m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCHex: " + _DTC[j].DTCHex + " Invalid Value\r\n", _DTC[j]._NO));
+                                    _Flag_HEX = false;
+                                }
+                            }
+                            //检测失效类型(目前仅检测ISO预留范围)
+                            if (_Flag_Code)
+                            {
+                                //检测最后一个字节的失效类型
+                                string _FailureType = _DTC[j].DTCCode.Substring(5, 2);  //取失效类型
+                                if (_FailureType[0] == '0')
+                                {
+                                    if (_FailureType[1] >= 'A')
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '1')
+                                {
+                                    if (_FailureType[1] == '0')
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '2')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= 'A') && (_FailureType[1] <= 'E')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '3')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= 'B') && (_FailureType[1] <= 'F')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '4')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= 'C') && (_FailureType[1] <= 'F')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '5')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= '6') && (_FailureType[1] <= 'F')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '6')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= '9') && (_FailureType[1] <= 'F')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '7')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= 'C') && (_FailureType[1] <= 'F')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '8')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= '9') && (_FailureType[1] <= 'E')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] == '9')
+                                {
+                                    if ((_FailureType[1] == '0') || ((_FailureType[1] >= '9') && (_FailureType[1] <= 'F')))
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_FailureType[0] >= 'A' && _FailureType[0] <= 'E')
+                                {
+                                    m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " Invalid FailureType(ISO/SAE Reserved)\r\n", _DTC[j]._NO));
+                                    continue;
+                                }
+                                if (_FailureType[0] == 'F')
+                                {
+                                    m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Warning: DTCCode: " + _DTC[j].DTCCode + " Use OEM defined FailureType\r\n", _DTC[j]._NO));
+                                    continue;
+                                }
+                            }
+                            //检测HEX及Code一致性
+                            if (_Flag_Code && _Flag_HEX)  //只有都是有效值，才会核对该内容
+                            {
+                                //B
+                                if (_DTC[j].DTCCode.Substring(0,2) == "B0")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("B0","8") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "B1")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("B1", "9") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "B2")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("B2", "A") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "B3")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("B3", "B") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                //C
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "C0")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("C0", "4") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "C1")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("C1", "5") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "C2")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("C2", "6") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "C3")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("C3", "7") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                //P
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "P0")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("P0", "0") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "P1")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("P1", "1") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "P2")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("P2", "2") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "P3")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("P3", "3") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                //U
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "U0")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("U0", "C") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "U1")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("U1", "D") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "U2")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("U2", "E") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                                if (_DTC[j].DTCCode.Substring(0, 2) == "U3")
+                                {
+                                    if (_DTC[j].DTCCode.Replace("U3", "F") != _DTC[j].DTCHex)
+                                    {
+                                        m_Edit_Process.AppendText(string.Format("---->[NO.{0:D}]Error: DTCCode: " + _DTC[j].DTCCode + " && DTCHex: " + _DTC[j].DTCHex + " is inconsistent\r\n", _DTC[j]._NO));
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 return true;
             }
             catch (Exception err)
             {
-                m_Edit_Process.AppendText("---->Error:" + err.Message);
+                m_Edit_Process.AppendText("---->Error:" + err.Message + "\r\n");
                 return false;
             }
             finally
@@ -191,6 +501,48 @@ namespace CheckDiagnostic
                     app.Quit();
                     PublicMethod.Kill(app);
                 }
+            }
+        }
+        public bool CheckDTCInvalid(int _Flag, DTCInfo _DTC_Check)  //0:DTCCode,1:DTCHex
+        {
+            if (_Flag == 0)
+            {
+                if (_DTC_Check.DTCCode[0] != 'C' &&
+                    _DTC_Check.DTCCode[0] != 'B' &&
+                    _DTC_Check.DTCCode[0] != 'U' &&
+                    _DTC_Check.DTCCode[0] != 'P')
+                {
+                    return false;
+                }
+                if (_DTC_Check.DTCCode[1] < '0' || _DTC_Check.DTCCode[1] > '3')
+                {
+                    return false;
+                }
+                for (int i = 0;i < 5;++i)
+                {
+                    if ((!(_DTC_Check.DTCCode[2 + i] >= '0' && _DTC_Check.DTCCode[2 + i] <= '9')) &&
+                        (!(_DTC_Check.DTCCode[2 + i] >= 'A' && _DTC_Check.DTCCode[2 + i] <= 'F')))
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            else if (_Flag == 1)
+            {
+                for (int i = 0; i < 6; ++i)
+                {
+                    if ((!(_DTC_Check.DTCHex[i] >= '0' && _DTC_Check.DTCHex[i] <= '9')) &&
+                        (!(_DTC_Check.DTCHex[i] >= 'A' && _DTC_Check.DTCHex[i] <= 'F')))
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            else
+            {
+                return false;
             }
         }
         public void ReadScript(string ScriptPath, ref ScriptStep _Step)
@@ -208,6 +560,7 @@ namespace CheckDiagnostic
             Regex ScriptCloseWorkSheet = new Regex("^CloseWorkSheet\\(\\);");  //关闭工作页
             Regex ScriptCheckItem = new Regex("^CheckItem\\((.+),(.+),(.+),\"(.+)\",\"(.+)\"\\);");  //打开工作页
             Regex ScriptCheckNRC = new Regex("^CheckNRC\\((.+),(.+),\"(.+)\",\"(.+)\",\"(.+)\",\"(.+)\"\\);");  //打开工作页
+            Regex ScriptCheckDTC = new Regex("^CheckDTCCodeHex\\((.+),(.+),(.+)\\);");  //检查DTC
             for (int i = 0; i < ScriptLine.Length; ++i)  //获取有效的行数，确定步骤数目
             {
                 if (ScriptLine[i] != string.Empty)
@@ -285,6 +638,18 @@ namespace CheckDiagnostic
                         _Buffer.StringCheck = match.Groups[4].Value;  //不支持NRC
                         _Buffer.M_NRC_Des = match.Groups[5].Value;
                         _Buffer.U_NRC_Des = match.Groups[6].Value;
+                        _Step.m_Step.Add(_Buffer);
+                        _Step.StepCounts++;
+                        continue;
+                    }
+                    else if (ScriptCheckDTC.IsMatch(ScriptLine[i]))
+                    {
+                        ScriptMode _Buffer = new ScriptMode();
+                        match = ScriptCheckDTC.Match(ScriptLine[i]);
+                        _Buffer.ScriptType = 8;
+                        _Buffer.Position_Y = Convert.ToInt32(match.Groups[2].Value);
+                        _Buffer.Position_X = Convert.ToInt32(match.Groups[1].Value);
+                        _Buffer.DTC_Count = Convert.ToInt32(match.Groups[3].Value);
                         _Step.m_Step.Add(_Buffer);
                         _Step.StepCounts++;
                         continue;

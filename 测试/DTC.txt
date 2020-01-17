@@ -6,7 +6,7 @@
 // Example: CloseExcel();  预留
 // Example: Define("File Imformation");  //一定要有字符
 // Example: CheckNRC(D,11,"M1-M2-M3","U1-U2-U3","xxx still need to support:","xxx don't need to suppot:");  //M代表必须包含的NRC，U代表不允许包含的NRC
-// Example: CheckDTCCodeHex(A,11,B,12,46);  //若有异常会根据不同情况输出：
+// Example: CheckDTCCodeHex(1,2,46);  //若有异常会根据不同情况输出：
 // 1. ---->Error: DTCCode: XXXXXXXX & DTCHex: XXXXXX is inconsistent
 // 2. ---->Error: DTCCode: XXXXXXXX Duplicate
 // 3. ---->Error: DTCCode: XXXXXX invalid length
@@ -25,10 +25,10 @@ Define("#NULL");
 
 Show("Open excel file... ...");
 OpenExcel();
-OpenWorkSheet(4,"D8:M42");
-Show("Check Application WorkSheet... ...");
+OpenWorkSheet(1,"B11:C300");
+Show("Check DTC_Information WorkSheet... ...");
 //***************检测DTC状态**************
-
+CheckDTCCodeHex(1,2,76);
 //收尾
 Show("Check Application WorkSheet Completed!");
 Show("Close excel file... ...");
